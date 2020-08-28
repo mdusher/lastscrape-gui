@@ -1,4 +1,4 @@
-#! /usr/bin/python
+#! /usr/bin/env python3
 # Encoding: UTF-8
 
 #
@@ -24,8 +24,8 @@
 #
 
 import sys
-from PyQt4 import QtCore, QtGui, uic
-from PyQt4.Qt import Qt
+from PyQt5 import QtCore, QtGui, uic, QtWidgets
+from PyQt5.Qt import Qt, QApplication
 import lastexport
 import scrobble
 from datetime import datetime
@@ -54,7 +54,7 @@ def report_error(backtrace):
                             QtCore.SLOT('reject()'))
         layout.addWidget(closebutton)
         errordialog.exec_()
-        QtGui.QApplication.exit()
+        QApplication.exit()
 
 def errors_reported(func):
     def wrapper(*args, **kwargs):
@@ -66,9 +66,9 @@ def errors_reported(func):
             report_error(backtrace)
     return wrapper
 
-class MainWindow(QtGui.QWidget):
+class MainWindow(QtWidgets.QWidget):
     def __init__(self):
-        QtGui.QWidget.__init__(self)
+        QtWidgets.QWidget.__init__(self)
         self.worker = None
         self.uploader = None
         self.cancel_loads = lambda:None
@@ -93,7 +93,6 @@ class MainWindow(QtGui.QWidget):
         self.twTabs.setTabEnabled(4, credits)
 
     @errors_reported
-    @QtCore.pyqtSignature("")
     def on_btnChangeFilename_clicked(self, *args):
         if args: return
         newFilename = QtGui.QFileDialog.getSaveFileName(self,
@@ -103,12 +102,11 @@ class MainWindow(QtGui.QWidget):
             self.txtFilename.setText(newFilename)
 
     @errors_reported
-    @QtCore.pyqtSignature("")
     def on_btnGrab_clicked(self, *args):
         if args: return
         username = self.txtUsername.text()
         if not username:
-            QtGui.QMessageBox.warning(self,
+            QtWidgets.QMessageBox.warning(self,
                                      "Nag",
                                      "Please put in your username")
             return
@@ -121,10 +119,10 @@ class MainWindow(QtGui.QWidget):
         self.bpLoad.show()
         self.twTabs.setCurrentWidget(self.tabGrab)
         self.worker = worker = ScraperThread(username, self.cbScrapeSource.currentText())
-        self.connect(worker, QtCore.SIGNAL("freshTracks"), self.add_tracks)
-        self.connect(worker, QtCore.SIGNAL("error"), report_error)
-        self.connect(worker, QtCore.SIGNAL("finished()"), self.worker_done)
-        self.connect(worker, QtCore.SIGNAL("terminated()"), self.worker_killed)
+        worker.fresh_tracks.connect(self.add_tracks)
+        worker.error.connect(report_error)
+        worker.finished.connect(self.worker_done)
+        worker.terminated.connect(self.worker_killed)
         worker.start()
     def worker_done(self):
         self.worker = None
@@ -139,7 +137,6 @@ class MainWindow(QtGui.QWidget):
         self.twTabs.setCurrentWidget(self.tabInfo)
 
     @errors_reported
-    @QtCore.pyqtSignature("")
     def on_btnToCleanup_clicked(self, *args):
         if args: return
         self.btnSave.setEnabled(False)
@@ -159,7 +156,7 @@ class MainWindow(QtGui.QWidget):
                 track = line.strip('\r\n').split('\t')
                 tracks.append( track )
                 if len(tracks)>=250:
-                    QtGui.QApplication.processEvents()
+                    QApplication.processEvents()
                     if exiting[0]:
                         break
                     self.add_tracks(tracks)
@@ -175,7 +172,6 @@ class MainWindow(QtGui.QWidget):
             infile.close()
 
     @errors_reported
-    @QtCore.pyqtSignature("")
     def on_btnSave_clicked(self, *args):
         if args: return
         self.saveToFile()
@@ -188,7 +184,6 @@ class MainWindow(QtGui.QWidget):
         self.twTabs.setCurrentWidget(self.tabPush)
 
     @errors_reported
-    @QtCore.pyqtSignature("")
     def on_btnImport_clicked(self, *args):
         if args: return
         if self.uploader: return
@@ -203,17 +198,15 @@ class MainWindow(QtGui.QWidget):
                     client_code = 'imp',
                 )
         except Exception as e:
-            QtGui.QMessageBox.warning(self, "Oops", "Couldn't connect to the "
+            QtWidgets.QMessageBox.warning(self, "Oops", "Couldn't connect to the "
                 "server. Please check your username and password.\n\n" +
                 str(e)[:256])
             return
         self.uploader = uploader = PushThread(scrobbler, self.scrobbles.tracklist)
-        self.connect(uploader, QtCore.SIGNAL("progress"),
-                               self.uploader_progress)
-        self.connect(uploader, QtCore.SIGNAL("error"), report_error)
-        self.connect(uploader, QtCore.SIGNAL("finished()"), self.uploader_done)
-        self.connect(uploader, QtCore.SIGNAL("terminated()"),
-                               self.uploader_killed)
+        self.uploader.progress.connect(self.uploader_progress)
+        self.uploader.error.connect(report_error)
+        self.uploader.finished.connect(self.uploader_done)
+        self.uploader.terminated.connect(self.uploader_killed)
         self.enableTabs(False, False, False)
         self.pgUpload.setMaximum(len(self.scrobbles.tracklist))
         self.pgUpload.setValue(0)
@@ -227,7 +220,7 @@ class MainWindow(QtGui.QWidget):
         self.uploader = None
         self.enableTabs()
         self.pgUpload.hide()
-        QtGui.QMessageBox.information(self, "Done!", "They've all been "
+        QtWidgets.QMessageBox.information(self, "Done!", "They've all been "
                 "uploaded! Thanks for your time.")
         self.scrobbles.clear()
     def uploader_killed(self):
@@ -322,15 +315,21 @@ class TracksModel(QtCore.QAbstractTableModel):
         self.endInsertRows()
 
     def clear(self):
+        self.beginResetModel()
         self.tracklist = []
         self.dateset = set()
-        self.reset()
+        self.endResetModel()
 
     def flags(self, index):
         return (Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsEditable |
                 Qt.ItemIsSelectable)
 
 class ScraperThread(QtCore.QThread):
+    fresh_tracks = QtCore.pyqtSignal(list)
+    error = QtCore.pyqtSignal()
+    terminated = QtCore.pyqtSignal()
+
+
     def __init__(self, username, server, parent = None):
         QtCore.QThread.__init__(self, parent)
         self.username = username
@@ -343,14 +342,17 @@ class ScraperThread(QtCore.QThread):
                     self.username,
                     sleep_func=lambda s: self.msleep(int(s * 1000)),
                 ):
-                self.emit(QtCore.SIGNAL("freshTracks"), tracks)
+                self.fresh_tracks.emit(tracks)
         except Exception as e:
             import traceback
             backtrace = traceback.format_exc(e)
-            self.emit(QtCore.SIGNAL("error"), backtrace)
+            self.error.emit(backtrace)
             #break #simulate
 
 class PushThread(QtCore.QThread):
+    progress = QtCore.pyqtSignal(tuple)
+    error = QtCore.pyqtSignal()
+    terminated = QtCore.pyqtSignal()
     def __init__(self, scrobbler, tracks, parent = None):
         QtCore.QThread.__init__(self, parent)
         self.scrobbler = scrobbler
@@ -362,15 +364,15 @@ class PushThread(QtCore.QThread):
                 track = [item.encode('utf-8') for item in track]
                 timestamp, trackname, artistname, albumname, trackmbid, artistmbid, albummbid = track
                 self.scrobbler.add_track(scrobble.ScrobbleTrack(timestamp, trackname, artistname, albumname, trackmbid))
-                self.emit(QtCore.SIGNAL("progress"), (timestamp, trackname, artistname, albumname, trackmbid))
+                self.progress.emit((timestamp, trackname, artistname, albumname, trackmbid))
             self.scrobbler.submit(sleep_func=lambda s: self.msleep(int(s * 1000)))
         except Exception as e:
             import traceback
             backtrace = traceback.format_exc(e)
-            self.emit(QtCore.SIGNAL("error"), backtrace)
+            self.error.emit(backtrace)
 
 def main(*args):
-    app = QtGui.QApplication(sys.argv)
+    app = QApplication(sys.argv)
     mainwindow = MainWindow()
     mainwindow.show()
     sys.exit(app.exec_())
