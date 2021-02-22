@@ -23,7 +23,7 @@ Compatible with Python 3.5
 
 Instructions:
 
-1. Install PyQt4 (`pip3.5 install PyQt4`)
+1. Install PyQt5 (`pip3.5 install PyQt5`)
 2. Run gui.py
 3. Report how it went
 
